@@ -3,3 +3,5 @@ testMoveGenerate.txt
 main.py
 /.idea
 /venv/
+models/
+test.py
