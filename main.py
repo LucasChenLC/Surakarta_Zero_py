@@ -233,7 +233,7 @@ class MCTS_tree(object):
         else:
             """node has already expanded. Enter select phase."""
             # select child node with maximum action scroe
-            last_board = node.board
+            last_board = copy.deepcopy(node.board)
 
             action, node = node.select_new(c_PUCT)
             current_player = -current_player
@@ -304,7 +304,7 @@ class MCTS_tree(object):
 
     def do_simulation(self, board, current_player, restrict_round):
         node = self.root
-        last_board = board
+        last_board = copy.deepcopy(board)
         while (node.is_leaf() == False):
             # print("do_simulation while current_player : ", current_player)
             action, node = node.select(self.c_puct)
@@ -369,8 +369,8 @@ class GameBoard(object):
     board = [[-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1], [0, 0, 0, 0, 0, 0],
              [0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]]
 
-    blackNum = 6
-    whiteNum = 6
+    blackNum = 12
+    whiteNum = 12
 
     def __init__(self):
         self.round = 1
@@ -606,8 +606,8 @@ class GameBoard(object):
         self.board = [[-1, -1, -1, -1, -1, -1], [-1, -1, -1, -1, -1, -1], [0, 0, 0, 0, 0, 0],
                       [0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]]
 
-        self.blackNum = 6
-        self.whiteNum = 6
+        self.blackNum = 12
+        self.whiteNum = 12
         self.round = 1
         self.player = white_chess
         self.restrict_round = 0
@@ -779,7 +779,7 @@ class surakarta(object):
             mcts_probs.append(prob)
             current_players.append(self.game_borad.player)
 
-            last_state = self.game_borad
+            last_state = copy.deepcopy(self.game_borad)
             move = Move(int(action[0]), int(action[1]), int(action[2]), int(action[3]))
             self.game_borad = self.game_borad.make_move(move, self.game_borad)
             if self.game_borad.player is white_chess:

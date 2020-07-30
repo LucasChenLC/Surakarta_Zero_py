@@ -172,8 +172,7 @@ class policy_value_network_gpus(object):
         #     weights_list = ops.get_collection(ops.GraphKeys.WEIGHTS)
         if not weights_list:
             raise ValueError('No weights to regularize.')
-        with tf.name_scope('get_regularization_penalty',
-                            values=weights_list) as scope:
+        with tf.name_scope('get_regularization_penalty') as scope:
             penalties = [regularizer(w) for w in weights_list]
             penalties = [
                 p if p is not None else tf.constant(0.0) for p in penalties
