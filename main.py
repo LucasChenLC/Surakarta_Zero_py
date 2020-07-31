@@ -791,7 +791,7 @@ class surakarta(object):
         while not game_over:
             board_stack = [boards[0][-8:], boards[1][-8:]]
             action, probs, win_rate = self.get_action(board_stack, self.temperature)
-            print(self.game_borad.round)
+            print(self.game_borad.round, self.game_borad.whiteNum, self.game_borad.blackNum)
             prob = np.zeros(labels_len)
             for idx in range(len(probs[0][0])):
                 prob[label2i[probs[0][0][idx]]] = probs[0][1][idx]
