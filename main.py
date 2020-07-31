@@ -3,7 +3,7 @@ import asyncio
 from asyncio.queues import Queue
 import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
+import gc
 import random
 import time
 import argparse
@@ -12,6 +12,9 @@ import copy
 from policy_value_network_tf2 import *
 from policy_value_network_gpus_tf2 import *
 from threading import Lock
+from memory_profiler import profile
+import sys
+sys.setrecursionlimit(1000000)
 
 
 def create_uci_labels():
@@ -24,6 +27,17 @@ def create_uci_labels():
                         labels_array.append(str(i) + str(j) + str(k) + str(l))
     return labels_array
 
+
+def make_move(move, board):
+    origin = board.board[move.to_x][move.to_y]
+    player = board.board[move.from_x][move.from_y]
+    board.board[move.from_x][move.from_y] = 0
+    board.board[move.to_x][move.to_y] = player
+    if origin is black_chess:
+        board.blackNum -= 1
+    elif origin is white_chess:
+        board.whiteNum -= 1
+    return board
 
 def is_kill_move(state_prev, state_next):
     return state_next.blackNum - state_prev.blackNum + state_next.whiteNum - state_prev.whiteNum
@@ -71,13 +85,13 @@ class leaf_node(object):
         self.child = {}
         self.board = board
         if board_stack != {}:
-            self.board_stack = copy.deepcopy(board_stack)
+            self.board_stack = board_stack
         else:
             a = GameBoard()
             self.board_stack = [[], []]
             for i in range(8):
-                self.board_stack[0].append(copy.deepcopy(a.board))
-                self.board_stack[1].append(copy.deepcopy(a.board))
+                self.board_stack[0].append(a.board)
+                self.board_stack[1].append(a.board)
 
     def is_leaf(self):
         return self.child == {}
@@ -100,22 +114,19 @@ class leaf_node(object):
         tot_p = 1e-8
         action_probs = tf.squeeze(action_probs)
         player = self.board.board[moves[0].from_x][moves[0].from_y]
-        ori_board = copy.deepcopy(self.board)
         for action in moves:
-            self.board = copy.deepcopy(ori_board)
-            board = self.board.make_move(action, self.board)
+            board = make_move(action, copy.deepcopy(self.board))
             board_stack = copy.deepcopy(self.board_stack)
             if player == 1:
-                board_stack[1].append(copy.deepcopy(board.board))
+                board_stack[1].append(board.board)
                 del board_stack[1][0]
             else:
-                board_stack[0].append(copy.deepcopy(board.board))
+                board_stack[0].append(board.board)
                 del board_stack[0][0]
             mov_p = action_probs[label2i[str(action.from_x) + str(action.from_y) + str(action.to_x) + str(action.to_y)]]
             new_node = leaf_node(self, mov_p, board, board_stack)
             self.child[str(action.from_x) + str(action.from_y) + str(action.to_x) + str(action.to_y)] = new_node
             tot_p += mov_p
-        self.board = copy.deepcopy(ori_board)
         for a, n in self.child.items():
             n.P /= tot_p
 
@@ -193,11 +204,29 @@ class MCTS_tree(object):
         self.update_b_r(board, current_player)
         return self.board_record  # 6 * 6 * 16
 
+    #@profile(precision=4)
     def update_tree(self, act):
         # if(act in self.root.child):
         self.expanded.discard(self.root)
+        #ori_root = self.root
         self.root = self.root.child[act]
+        #self.clear_tree(ori_root, act)
         self.root.parent = None
+        gc.collect()
+
+    def clear_tree(self,root,act):
+        for child in root.child.items():
+            if child is not root.child[act]:
+                self.clear_tree_recursive(child[1])
+
+    def clear_tree_recursive(self, subroot):
+        if subroot.child == {}:
+           del subroot
+           return
+        else:
+            for child in self.root.child.items():
+                self.clear_tree_recursive(child[1])
+            del subroot
 
     def is_expanded(self, key) -> bool:
         return key in self.expanded
@@ -241,7 +270,6 @@ class MCTS_tree(object):
                 restrict_round += 1
             else:
                 restrict_round = 0
-            last_board = node.board
 
             node.N += virtual_loss
             node.W += -virtual_loss
@@ -283,11 +311,11 @@ class MCTS_tree(object):
         await self.queue.put(item)
         return future
 
-    # @profile
+
     def main(self, board_stack, current_player, restrict_round, playouts):
         node = self.root
         if not self.is_expanded(node):
-            node.board_stack = copy.deepcopy(board_stack)
+            node.board_stack = board_stack
             positions = self.generate_inputs(node.board_stack, current_player)
             positions = np.expand_dims(positions, 0)
             action_probs, value = self.forward(positions)
@@ -583,16 +611,6 @@ class GameBoard(object):
 
         return moves
 
-    def make_move(self, move, board):
-        origin = board.board[move.to_x][move.to_y]
-        player = board.board[move.from_x][move.from_y]
-        board.board[move.from_x][move.from_y] = 0
-        board.board[move.to_x][move.to_y] = player
-        if origin is black_chess:
-            self.blackNum = self.blackNum - 1
-        elif origin is white_chess:
-            self.whiteNum = self.whiteNum - 1
-        return self
 
     def is_game_over(self):
         if self.blackNum == 0:
@@ -739,6 +757,7 @@ class surakarta(object):
             self.log_file.close()
             self.policy_value_netowrk.save(self.global_step)
 
+    #@profile(precision=4)
     def get_action(self, board_stack, temperature=1e-3):
 
         self.mcts.main(board_stack, self.game_borad.player, self.game_borad.restrict_round, self.playout_counts)
@@ -766,10 +785,10 @@ class surakarta(object):
         game_over = False
         a = GameBoard()
         for i in range(8):
-            boards[0].append(copy.deepcopy(a.board))
-            boards[1].append(copy.deepcopy(a.board))
+            boards[0].append(a.board)
+            boards[1].append(a.board)
         start_time = time.time()
-        while (not game_over):
+        while not game_over:
             board_stack = [boards[0][-8:], boards[1][-8:]]
             action, probs, win_rate = self.get_action(board_stack, self.temperature)
             print(self.game_borad.round)
@@ -781,11 +800,11 @@ class surakarta(object):
 
             last_state = copy.deepcopy(self.game_borad)
             move = Move(int(action[0]), int(action[1]), int(action[2]), int(action[3]))
-            self.game_borad = self.game_borad.make_move(move, self.game_borad)
+            self.game_borad = make_move(move, copy.deepcopy(self.game_borad))
             if self.game_borad.player is white_chess:
-                boards[1].append(copy.deepcopy(self.game_borad.board))
+                boards[1].append(self.game_borad.board)
             else:
-                boards[0].append(copy.deepcopy(self.game_borad.board))
+                boards[0].append(self.game_borad.board)
             self.game_borad.round += 1
             self.game_borad.player = -self.game_borad.player
             if is_kill_move(last_state, self.game_borad) == 0:
@@ -808,6 +827,8 @@ class surakarta(object):
                 z = np.zeros(len(current_players))
                 game_over = True
                 print("Game end. Tie in {} steps".format(self.game_borad.round - 1))
+            '''if self.game_borad.round >= 2:
+                return'''
 
         print("Using time {} s".format(time.time() - start_time))
         return boards, mcts_probs, z
