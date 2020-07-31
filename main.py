@@ -12,9 +12,7 @@ import copy
 from policy_value_network_tf2 import *
 from policy_value_network_gpus_tf2 import *
 from threading import Lock
-from memory_profiler import profile
-import sys
-sys.setrecursionlimit(1000000)
+
 
 
 def create_uci_labels():
