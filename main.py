@@ -1,9 +1,3 @@
-from asyncio import Future
-import asyncio
-from asyncio.queues import Queue
-import uvloop
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-import gc
 import random
 import time
 import argparse
@@ -12,7 +6,7 @@ import copy
 from policy_value_network_tf2 import *
 from policy_value_network_gpus_tf2 import *
 from threading import Lock
-
+import gc
 
 
 def create_uci_labels():
@@ -24,6 +18,23 @@ def create_uci_labels():
                     if bool(i != k) or bool(j != l):
                         labels_array.append(str(i) + str(j) + str(k) + str(l))
     return labels_array
+
+
+def clear_tree(root, act):
+    for child in root.child.items():
+        if child[1] is not root.child[act]:
+            clear_tree_recursive(child)
+
+def clear_tree_recursive(subroot):
+    if subroot[1].child == {}:
+        subroot[1].parent = None
+        del subroot
+        return
+    else:
+        for child in subroot[1].child.items():
+            clear_tree_recursive(child)
+            child[1].parent = None
+            del child
 
 
 def make_move(move, board):
@@ -112,19 +123,21 @@ class leaf_node(object):
         tot_p = 1e-8
         action_probs = tf.squeeze(action_probs)
         player = self.board.board[moves[0].from_x][moves[0].from_y]
+        board_stack = copy.deepcopy(self.board_stack)
         for action in moves:
             board = make_move(action, copy.deepcopy(self.board))
-            board_stack = copy.deepcopy(self.board_stack)
             if player == 1:
                 board_stack[1].append(board.board)
-                del board_stack[1][0]
             else:
                 board_stack[0].append(board.board)
-                del board_stack[0][0]
             mov_p = action_probs[label2i[str(action.from_x) + str(action.from_y) + str(action.to_x) + str(action.to_y)]]
-            new_node = leaf_node(self, mov_p, board, board_stack)
+            new_node = leaf_node(self, mov_p, board, copy.deepcopy([board_stack[0][-8:], board_stack[1][-8:]]))
             self.child[str(action.from_x) + str(action.from_y) + str(action.to_x) + str(action.to_y)] = new_node
             tot_p += mov_p
+            if player == 1:
+                del board_stack[1][-1]
+            else:
+                del board_stack[0][-1]
         for a, n in self.child.items():
             n.P /= tot_p
 
@@ -157,12 +170,8 @@ class MCTS_tree(object):
         self.node_lock = defaultdict(Lock)
 
         self.virtual_loss = 3
-        self.now_expanding = set()
         self.expanded = set()
         self.cut_off_depth = 30
-        self.sem = asyncio.Semaphore(search_threads)
-        self.queue = Queue(search_threads)
-        self.loop = asyncio.get_event_loop()
         self.running_simulation_num = 0
 
     def init_b_r(self):
@@ -206,69 +215,41 @@ class MCTS_tree(object):
     def update_tree(self, act):
         # if(act in self.root.child):
         self.expanded.discard(self.root)
-        #ori_root = self.root
-        self.root = self.root.child[act]
-        #self.clear_tree(ori_root, act)
-        self.root.parent = None
+        next_root = self.root.child[act]
+        next_root.parent = None
+        clear_tree(self.root, act)
+        self.root = next_root
         gc.collect()
+        #self.clear_tree(ori_root, act)
 
-    def clear_tree(self,root,act):
-        for child in root.child.items():
-            if child is not root.child[act]:
-                self.clear_tree_recursive(child[1])
 
-    def clear_tree_recursive(self, subroot):
-        if subroot.child == {}:
-           del subroot
-           return
-        else:
-            for child in self.root.child.items():
-                self.clear_tree_recursive(child[1])
-            del subroot
 
     def is_expanded(self, key) -> bool:
         return key in self.expanded
 
-    async def tree_search(self, node, current_player, restrict_round) -> float:
-        self.running_simulation_num += 1
-
-        async with self.sem:
-            value = await self.start_tree_search(node, current_player, restrict_round)
-            self.running_simulation_num -= 1
-
-            return value
-
-    async def start_tree_search(self, node, current_player, restrict_round) -> float:
-
-        now_expanding = self.now_expanding
-
-        while node in now_expanding:
-            await asyncio.sleep(1e-4)
+    def tree_search(self, node, current_player, restrict_round) -> float:
 
         if not self.is_expanded(node):
-            self.now_expanding.add(node)
             positions = self.generate_inputs(node.board_stack, current_player)
-            future = await self.push_queue(positions)
-            await future
-            action_probs, value = future.result()
+            action_probs, value = self.forward(positions)
             moves = GameBoard.move_generate(node.board, current_player)
             node.expand(moves, action_probs)
             self.expanded.add(node)
-            self.now_expanding.remove(node)
             return value[0] * -1
 
         else:
             """node has already expanded. Enter select phase."""
             # select child node with maximum action scroe
-            last_board = copy.deepcopy(node.board)
+            #last_board = copy.deepcopy(node.board)
 
             action, node = node.select_new(c_PUCT)
             current_player = -current_player
+            '''
             if is_kill_move(last_board, node.board) == 0:
                 restrict_round += 1
             else:
                 restrict_round = 0
-
+            '''
             node.N += virtual_loss
             node.W += -virtual_loss
 
@@ -281,35 +262,14 @@ class MCTS_tree(object):
             elif restrict_round >= 60:
                 value = 0.0
             else:
-                value = await self.start_tree_search(node, current_player, restrict_round)  # next move
+                value = self.tree_search(node, current_player, restrict_round)  # next move
             node.N += -virtual_loss
             node.W += virtual_loss
 
             node.back_up_value(value)
             return value * -1
 
-    async def prediction_worker(self):
-        q = self.queue
-        margin = 10
-        while self.running_simulation_num > 0 or margin > 0:
-            if q.empty():
-                if margin > 0:
-                    margin -= 1
-                await asyncio.sleep(1e-3)
-                continue
-            item_list = [q.get_nowait() for _ in range(q.qsize())] # type: list[QueueItem]
-            features = np.asarray([item.feature for item in item_list])
-            action_probs, value = self.forward(features)
-            for p, v, item in zip(action_probs, value, item_list):
-                item.future.set_result((p, v))
-
-    async def push_queue(self, features):
-        future = self.loop.create_future()
-        item = QueueItem(features, future)
-        await self.queue.put(item)
-        return future
-
-
+    #@profile(precision=4)
     def main(self, board_stack, current_player, restrict_round, playouts):
         node = self.root
         if not self.is_expanded(node):
@@ -322,23 +282,22 @@ class MCTS_tree(object):
             node.expand(moves, action_probs)
             self.expanded.add(node)
 
-        coroutine_list = []
         for _ in range(playouts):
-            coroutine_list.append(self.tree_search(node, current_player, restrict_round))
-        coroutine_list.append(self.prediction_worker())
-        self.loop.run_until_complete(asyncio.gather(*coroutine_list))
+            self.tree_search(node, current_player, restrict_round)
 
     def do_simulation(self, board, current_player, restrict_round):
         node = self.root
-        last_board = copy.deepcopy(board)
+        #last_board = copy.deepcopy(board)
         while (node.is_leaf() == False):
             # print("do_simulation while current_player : ", current_player)
             action, node = node.select(self.c_puct)
             current_player = -current_player
+            '''
             if is_kill_move(last_board, node.board) == 0:
                 restrict_round += 1
             else:
                 restrict_round = 0
+                '''
             last_board = node.board
 
         positions = self.generate_inputs(node.board, current_player)
@@ -755,7 +714,6 @@ class surakarta(object):
             self.log_file.close()
             self.policy_value_netowrk.save(self.global_step)
 
-    #@profile(precision=4)
     def get_action(self, board_stack, temperature=1e-3):
 
         self.mcts.main(board_stack, self.game_borad.player, self.game_borad.restrict_round, self.playout_counts)
@@ -796,7 +754,7 @@ class surakarta(object):
             mcts_probs.append(prob)
             current_players.append(self.game_borad.player)
 
-            last_state = copy.deepcopy(self.game_borad)
+            #last_state = copy.deepcopy(self.game_borad)
             move = Move(int(action[0]), int(action[1]), int(action[2]), int(action[3]))
             self.game_borad = make_move(move, copy.deepcopy(self.game_borad))
             if self.game_borad.player is white_chess:
@@ -805,11 +763,12 @@ class surakarta(object):
                 boards[0].append(self.game_borad.board)
             self.game_borad.round += 1
             self.game_borad.player = -self.game_borad.player
+            '''
             if is_kill_move(last_state, self.game_borad) == 0:
                 self.game_borad.restrict_round += 1
             else:
                 self.game_borad.restrict_round = 0
-
+            '''
             if self.game_borad.is_game_over() != False:
                 z = np.zeros(len(current_players))
                 if (self.game_borad.is_game_over() == -1):
@@ -825,9 +784,11 @@ class surakarta(object):
                 z = np.zeros(len(current_players))
                 game_over = True
                 print("Game end. Tie in {} steps".format(self.game_borad.round - 1))
-            '''if self.game_borad.round >= 2:
-                return'''
 
+            if self.game_borad.round >= 2:
+                return
+
+            gc.collect()
         print("Using time {} s".format(time.time() - start_time))
         return boards, mcts_probs, z
 
@@ -862,7 +823,7 @@ if __name__ == '__main__':
     if args.mode == 'train':
         train_main = surakarta(args.train_playout, args.batch_size, True, args.search_threads, args.processor, args.num_gpus,
                                args.res_block_nums, args.human_color)  # * args.num_gpus
-        train_main.run()
+        train_main.selfplay()
     '''
     elif args.mode == 'play':
         from ChessGame_tf2 import *
