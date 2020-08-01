@@ -240,16 +240,16 @@ class MCTS_tree(object):
         else:
             """node has already expanded. Enter select phase."""
             # select child node with maximum action scroe
-            #last_board = copy.deepcopy(node.board)
+            last_board = copy.deepcopy(node.board)
 
             action, node = node.select_new(c_PUCT)
             current_player = -current_player
-            '''
+
             if is_kill_move(last_board, node.board) == 0:
                 restrict_round += 1
             else:
                 restrict_round = 0
-            '''
+
             node.N += virtual_loss
             node.W += -virtual_loss
 
@@ -287,17 +287,17 @@ class MCTS_tree(object):
 
     def do_simulation(self, board, current_player, restrict_round):
         node = self.root
-        #last_board = copy.deepcopy(board)
+        last_board = copy.deepcopy(board)
         while (node.is_leaf() == False):
             # print("do_simulation while current_player : ", current_player)
             action, node = node.select(self.c_puct)
             current_player = -current_player
-            '''
+
             if is_kill_move(last_board, node.board) == 0:
                 restrict_round += 1
             else:
                 restrict_round = 0
-                '''
+
             last_board = node.board
 
         positions = self.generate_inputs(node.board, current_player)
@@ -754,7 +754,7 @@ class surakarta(object):
             mcts_probs.append(prob)
             current_players.append(self.game_borad.player)
 
-            #last_state = copy.deepcopy(self.game_borad)
+            last_state = copy.deepcopy(self.game_borad)
             move = Move(int(action[0]), int(action[1]), int(action[2]), int(action[3]))
             self.game_borad = make_move(move, copy.deepcopy(self.game_borad))
             if self.game_borad.player is white_chess:
@@ -763,12 +763,12 @@ class surakarta(object):
                 boards[0].append(self.game_borad.board)
             self.game_borad.round += 1
             self.game_borad.player = -self.game_borad.player
-            '''
+
             if is_kill_move(last_state, self.game_borad) == 0:
                 self.game_borad.restrict_round += 1
             else:
                 self.game_borad.restrict_round = 0
-            '''
+
             if self.game_borad.is_game_over() != False:
                 z = np.zeros(len(current_players))
                 if (self.game_borad.is_game_over() == -1):
