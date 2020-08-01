@@ -714,8 +714,8 @@ class surakarta(object):
             self.log_file.close()
             self.policy_value_netowrk.save(self.global_step)
 
-    def get_action(self, board_stack, temperature=1e-3):
-
+    def get_action(self, board, board_stack, temperature=1e-3):
+        self.mcts.reload(board)
         self.mcts.main(board_stack, self.game_borad.player, self.game_borad.restrict_round, self.playout_counts)
 
         actions_visits = [(act, nod.N) for act, nod in self.mcts.root.child.items()]
@@ -746,7 +746,7 @@ class surakarta(object):
         start_time = time.time()
         while not game_over:
             board_stack = [boards[0][-8:], boards[1][-8:]]
-            action, probs, win_rate = self.get_action(board_stack, self.temperature)
+            action, probs, win_rate = self.get_action(self.game_borad, board_stack, self.temperature)
             print(self.game_borad.round, self.game_borad.whiteNum, self.game_borad.blackNum)
             prob = np.zeros(labels_len)
             for idx in range(len(probs[0][0])):
@@ -784,10 +784,10 @@ class surakarta(object):
                 z = np.zeros(len(current_players))
                 game_over = True
                 print("Game end. Tie in {} steps".format(self.game_borad.round - 1))
-
+            '''
             if self.game_borad.round >= 2:
                 return
-
+            '''
             gc.collect()
         print("Using time {} s".format(time.time() - start_time))
         return boards, mcts_probs, z
@@ -823,7 +823,7 @@ if __name__ == '__main__':
     if args.mode == 'train':
         train_main = surakarta(args.train_playout, args.batch_size, True, args.search_threads, args.processor, args.num_gpus,
                                args.res_block_nums, args.human_color)  # * args.num_gpus
-        train_main.selfplay()
+        train_main.run()
     '''
     elif args.mode == 'play':
         from ChessGame_tf2 import *
