@@ -7,6 +7,7 @@ from policy_value_network_tf2 import *
 from policy_value_network_gpus_tf2 import *
 from threading import Lock
 import gc
+import psutil
 
 
 def create_uci_labels():
@@ -747,7 +748,7 @@ class surakarta(object):
         while not game_over:
             board_stack = [boards[0][-8:], boards[1][-8:]]
             action, probs, win_rate = self.get_action(self.game_borad, board_stack, self.temperature)
-            print(self.game_borad.round, self.game_borad.whiteNum, self.game_borad.blackNum)
+            print(self.game_borad.round, self.game_borad.whiteNum, self.game_borad.blackNum, psutil.virtual_memory().percent)
             prob = np.zeros(labels_len)
             for idx in range(len(probs[0][0])):
                 prob[label2i[probs[0][0][idx]]] = probs[0][1][idx]
